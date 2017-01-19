@@ -166,13 +166,12 @@ private:
 
     EthernetII make_eth_packet(Dot11Data &dot11) {
         if (dot11.from_ds() && !dot11.to_ds()) {
-	    //cout << "MMMMMMMMMMMMMM From DS packet, da:dot11.addr1:" << dot11.addr1().to_string() << " sa:dot11.addr3:" << dot11.addr3().to_string() << "\n";
             return EthernetII(dot11.addr1(), dot11.addr3());
         }
         else if (!dot11.from_ds() && dot11.to_ds()) {
             return EthernetII(dot11.addr3(), dot11.addr2());
         }
-        else { 
+        else {
             return EthernetII(dot11.addr1(), dot11.addr2());
         }
     }
@@ -185,25 +184,33 @@ private:
                                const address_type& client_hw) {
         cout << "Captured handshake for " << ssid << " (" << bssid << "): " << client_hw << endl;
     }
-    
+
     template<typename Decrypter>
     bool try_decrypt(Decrypter &decrypter, PDU &pdu) {
         if (decrypter.decrypt(pdu)) {
 	    //cout << "UUUUUUUUUUUUUUUUUUUU Succesfful debugging -- from dot11decrypt\n";
+            auto &radiotap = pdu.rfind_pdu<RadioTap>();
             auto &dot11 = pdu.rfind_pdu<Dot11Data>();
             auto &snap = pdu.rfind_pdu<SNAP>();
             // create an EthernetII using the src and dst addrs
-            auto pkt = make_eth_packet(dot11);
+            //Testing
+            //auto pkt = make_eth_packet(dot11);
+            if (radiotap == nullptr or dot11 == nullptr) {
+              return false;
+            }
+            radiotap.inner_pdu(dot11);
+            dot11.inner_pdu(snap.release_inner_pdu());
             // move the inner pdu into the EthernetII to avoid copying
-            pkt.inner_pdu(snap.release_inner_pdu());
-            auto buffer = pkt.serialize();
+            //pkt.inner_pdu(snap.release_inner_pdu());
+            //auto buffer = pkt.serialize();
+            auto buffer = radiotap.serialize();
             if (write(*fd_, buffer.data(), buffer.size()) == -1) {
                 throw runtime_error("Error writing to tap interface");
             } else {
-		//cout << "Written pdu to tap0 \n";
-	    }
+                //cout << "Written pdu to tap0 \n";
+            }
             // if the decrypter is successfull, then SUCCESS
-	    //cout << "Try decrypt successful\n";
+	          //cout << "Try decrypt successful\n";
             return true;
         }
         return false;
