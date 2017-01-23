@@ -432,9 +432,14 @@ private:
                 data_retries:1,
                 channel_plus:1,
                 mcs:1,
-                reserved2:4,
+		ampdu_status:1,
+                vht_information:1,
+                reserved2:2,
 
-                reserved3:7,
+                reserved3:4,
+		reserved4:1,
+		radiotap_namespace:1,
+		vendor_namespace:1,
                 ext:1;
         } TINS_END_PACK;
     #else
@@ -458,14 +463,19 @@ private:
                 db_tx_attenuation:1,
                 tx_attenuation:1,
 
-                reserved2:4,
+                reserved2:2,
+                vht_information:1,
+                ampdu_status:1,
                 mcs:1,
                 channel_plus:1,
                 data_retries:1,
                 reserved1:1,
 
                 ext:1,
-                reserved3:7;
+                vendor_namespace:1,
+                radiotap_namespace:1,
+                reserved4:1,
+                reserved3:4;
         } TINS_END_PACK;
     #endif
 

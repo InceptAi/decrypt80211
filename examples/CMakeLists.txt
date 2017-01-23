@@ -20,6 +20,7 @@ IF(TINS_HAVE_CXX11)
         tcp_connection_close
         traceroute
         wps_detect
+	dot11decrypt
     )
     IF(Boost_REGEX_FOUND)
         SET(LIBTINS_CXX11_EXAMPLES ${LIBTINS_CXX11_EXAMPLES} http_requests)
@@ -67,8 +68,10 @@ if(THREADS_FOUND)
     IF(TINS_HAVE_CXX11)
         ADD_EXECUTABLE(traceroute EXCLUDE_FROM_ALL traceroute.cpp)
         ADD_EXECUTABLE(dns_stats EXCLUDE_FROM_ALL dns_stats.cpp)
+    	ADD_EXECUTABLE(dot11decrypt EXCLUDE_FROM_ALL dot11decrypt.cpp)
         TARGET_LINK_LIBRARIES(traceroute ${CMAKE_THREAD_LIBS_INIT})
         TARGET_LINK_LIBRARIES(dns_stats ${CMAKE_THREAD_LIBS_INIT})
+        TARGET_LINK_LIBRARIES(dot11decrypt ${CMAKE_THREAD_LIBS_INIT})
     ENDIF(TINS_HAVE_CXX11)
     IF(WIN32)
         MESSAGE(WARNING "Disabling portscan example since it doesn't compile on Windows.")

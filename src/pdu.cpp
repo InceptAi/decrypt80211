@@ -33,6 +33,8 @@
 
 using std::swap;
 using std::vector;
+using std::cout;
+using std::endl;
 
 namespace Tins {
 

@@ -83,11 +83,11 @@ RadioTap::RadioTap(const uint8_t* buffer, uint32_t total_sz) {
     const flags_type* current_flags = (const flags_type*)(buffer + sizeof(uint32_t));
     const uint32_t extra_flags_size = find_extra_flag_fields_size(
         buffer + sizeof(uint32_t), total_sz);
-    // Find and skip the extra flag fields.
+    // Skip the header
+    buffer += sizeof(radio_);
+    // Skip the extra flag fields.
     buffer += extra_flags_size;
     radiotap_hdr_size -= extra_flags_size;
-    // Also skip the header
-    buffer += sizeof(radio_);
     radiotap_hdr_size -= sizeof(radio_);
 
     while (true) {
@@ -289,6 +289,7 @@ void RadioTap::mcs(const mcs_type& new_mcs) {
 uint32_t RadioTap::header_size() const {
     uint32_t total_bytes = 0;
     if (radio_.flags.tsft) {
+        //Vivek -- what about offset bytes here ??
         total_bytes += sizeof(tsft_);
     }
     if (radio_.flags.flags) {
@@ -341,6 +342,11 @@ uint32_t RadioTap::header_size() const {
 
     return sizeof(radio_) + total_bytes;
 }
+
+
+//uint32_t RadioTap::header_size() const {
+//    return Endian::le_to_host(radio_.it_len);
+//}
 
 uint32_t RadioTap::trailer_size() const {
     // will be sizeof(uint32_t) if the FCS-at-the-end bit is on.
@@ -508,9 +514,12 @@ bool RadioTap::matches_response(const uint8_t* ptr, uint32_t total_sz) const {
 }
 
 void RadioTap::write_serialization(uint8_t* buffer, uint32_t total_sz, const PDU* parent) {
+    //printf("Called radiotap serialzation with total_sz:%d\n", total_sz);
     OutputMemoryStream stream(buffer, total_sz);
     uint8_t* buffer_start = buffer;
     radio_.it_len = Endian::host_to_le<uint16_t>(header_size());
+    //Vivek -- issue here is that radio_.it_present is still set to earlier version where ext could be 1 or 0. So we do a hack here where multiple flags are collapsed into 1.
+    radio_.flags.ext = 0;
     stream.write(radio_);
     if (radio_.flags.tsft) {
         stream.write(tsft_);

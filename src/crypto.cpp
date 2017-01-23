@@ -40,6 +40,8 @@
 #include "dot11/dot11_beacon.h"
 #include "exceptions.h"
 
+using std::endl;
+using std::cout;
 using std::string;
 using std::make_pair;
 using std::equal;
@@ -243,10 +245,10 @@ uint16_t lower_byte(uint16_t value) {
 
 HWAddress<6> get_bssid(const Dot11Data& dot11) {
     if (dot11.from_ds() && !dot11.to_ds()) {
-        return dot11.addr3();
+        return dot11.addr2();
     }
     else if (!dot11.from_ds() && dot11.to_ds()) {
-        return dot11.addr2();
+        return dot11.addr1();
     }
     else {
         return dot11.addr2();
@@ -322,12 +324,16 @@ SNAP* SessionKeys::ccmp_decrypt_unicast(const Dot11Data& dot11, RawPDU& raw) con
         pload[0]
     };
     
+    uint8_t counter[16];
+    counter[0] = 0x59;
+    counter[1] = 0;
+    dot11.addr2().copy(counter + 2);
+    copy(PN, PN + 6, counter + 8);
+    
     uint8_t AAD[32] = {0};
     AAD[0] = 0;
-    AAD[1] = 22 + 6 * int(dot11.from_ds() && dot11.to_ds());
-    if (dot11.subtype() == Dot11::QOS_DATA_DATA)  {
-        AAD[1] += 2;
-    }
+    //AAD[1] = 22 + 6 * int(dot11.from_ds() && dot11.to_ds());
+    AAD[1] = 22;
     AAD[2] = dot11.protocol() | (dot11.type() << 2) | ((dot11.subtype() << 4) & 0x80);
     AAD[3] = 0x40 | dot11.to_ds() | (dot11.from_ds() << 1) |
             (dot11.more_frag() << 2) | (dot11.order() << 7);
@@ -338,7 +344,18 @@ SNAP* SessionKeys::ccmp_decrypt_unicast(const Dot11Data& dot11, RawPDU& raw) con
     AAD[22] = dot11.frag_num();
     AAD[23] = 0;
     
+    if (dot11.subtype() == Dot11::QOS_DATA_DATA)  {
+        AAD[1] += 2;
+	uint8_t qos_control_bits[2] = {0};
+	uint16_t qos_control_bytes = (*((Dot11QoSData *) &dot11)).qos_control();
+	qos_control_bits[0] = (uint8_t)(qos_control_bytes >> 8) & 0xff;
+	qos_control_bits[1] = (uint8_t)qos_control_bytes & 0xff;
+	AAD[24] = qos_control_bits[1] & 0x0f;
+	
+    }
+    
     if (dot11.from_ds() && dot11.to_ds()) {
+	AAD[1] += 6;
         dot11.addr4().copy(AAD + 24);
     }
     
@@ -347,11 +364,6 @@ SNAP* SessionKeys::ccmp_decrypt_unicast(const Dot11Data& dot11, RawPDU& raw) con
     uint8_t crypted_block[16];
     size_t total_sz = raw.payload_size() - 16, offset = 8, blocks = (total_sz + 15) / 16;
     
-    uint8_t counter[16];
-    counter[0] = 0x59;
-    counter[1] = 0;
-    dot11.addr2().copy(counter + 2);
-    copy(PN, PN + 6, counter + 8);
     counter[14] = (total_sz >> 8) & 0xff;
     counter[15] = total_sz & 0xff;
     
@@ -361,7 +373,9 @@ SNAP* SessionKeys::ccmp_decrypt_unicast(const Dot11Data& dot11, RawPDU& raw) con
     xor_range(MIC, AAD + 16, MIC, 16);
     AES_encrypt(MIC, MIC, &ctx);
     
-    counter[0] = 1;
+    //Fix this look at tshark
+    //counter[0] = 1;
+    counter[0] &= 0x07;
     counter[14] = counter[15] = 0;
     AES_encrypt(counter, crypted_block, &ctx);
     uint8_t nice_MIC[8];
@@ -382,12 +396,14 @@ SNAP* SessionKeys::ccmp_decrypt_unicast(const Dot11Data& dot11, RawPDU& raw) con
         AES_encrypt(MIC, MIC, &ctx);   
         offset += block_sz;
     }
+    
     if (equal(nice_MIC, nice_MIC + sizeof(nice_MIC), MIC)) {
         return new SNAP(&pload[0], total_sz);
     }
     else {
         return 0;
     }
+    
 }
 
 RC4Key SessionKeys::generate_rc4_key(const Dot11Data& dot11, const RawPDU& raw) const {
@@ -572,7 +588,7 @@ const WPA2Decrypter::keys_map& WPA2Decrypter::get_keys() const {
 
 WPA2Decrypter::addr_pair WPA2Decrypter::extract_addr_pair(const Dot11Data& dot11) {
     if (dot11.from_ds() && !dot11.to_ds()) {
-        return make_addr_pair(dot11.addr2(), dot11.addr3());
+        return make_addr_pair(dot11.addr1(), dot11.addr3());
     }
     else if (!dot11.from_ds() && dot11.to_ds()) {
         return make_addr_pair(dot11.addr1(), dot11.addr2());
@@ -629,7 +645,7 @@ bool WPA2Decrypter::decrypt(PDU& pdu) {
         RawPDU* raw = pdu.find_pdu<RawPDU>();
         if (data && raw && data->wep()) {
             // search for the tuple (bssid, src_addr)
-            keys_map::const_iterator it = keys_.find(extract_addr_pair(*data));
+            keys_map::iterator it = keys_.find(extract_addr_pair(*data));
             
             // search for the tuple (bssid, dst_addr) if the above didn't work
             if (it == keys_.end()) {
@@ -642,7 +658,7 @@ bool WPA2Decrypter::decrypt(PDU& pdu) {
                     data->wep(0);
                     return true;
                 }
-            }
+            } 
         }
     }
     return false;
