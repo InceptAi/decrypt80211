@@ -37,6 +37,7 @@
 #include <memory>
 #include <stdexcept>
 #include <iterator>
+#include <chrono>
 #include "pdu.h"
 #include "packet.h"
 #include "cxxstd.h"
@@ -182,7 +183,7 @@ public:
      * \param max_packets The maximum amount of packets to sniff. 0 == infinite.
      */
     template <typename Functor>
-    void sniff_loop(Functor function, uint32_t max_packets = 0);
+    void sniff_loop(Functor function, uint32_t max_packets = 0, uint32_t max_time_secs = 0);
 
     /**
      * \brief Sets a filter on this sniffer.
@@ -621,7 +622,9 @@ protected:
 };
 
 template <typename Functor>
-void Tins::BaseSniffer::sniff_loop(Functor function, uint32_t max_packets) {
+void Tins::BaseSniffer::sniff_loop(Functor function, uint32_t max_packets, uint32_t max_time_secs) {
+    std::chrono::time_point<std::chrono::system_clock> start, current;
+    start = std::chrono::system_clock::now();
     for(iterator it = begin(); it != end(); ++it) {
         try {
             // If the functor returns false, we're done
@@ -639,6 +642,13 @@ void Tins::BaseSniffer::sniff_loop(Functor function, uint32_t max_packets) {
         catch(pdu_not_found&) { }
         if (max_packets && --max_packets == 0) {
             return;
+        }
+        if (max_time_secs > 0) {
+          current = std::chrono::system_clock::now();
+          std::chrono::duration<double> elapsed_seconds = current - start;
+          if ((uint32_t)elapsed_seconds.count() > max_time_secs) { 
+            return;
+          }
         }
     }
 }

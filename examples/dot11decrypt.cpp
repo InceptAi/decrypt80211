@@ -25,14 +25,16 @@
 #include <tins/tins.h>
 // linux/POSIX stuff
 #include <netinet/in.h>
-#include <linux/if.h>
-#include <linux/if_tun.h>
+//#include <linux/if.h>
+//#include <linux/if_tun.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
+#include <sys/time.h>
+#include <stdio.h>
 // STL
 #include <iostream>
 #include <atomic>
@@ -45,6 +47,7 @@
 #include <queue>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include "tins/packet_writer.h"
 
 using namespace Tins;
@@ -142,28 +145,28 @@ public:
                                                          this, _1, _2, _3));
         #endif // TINS_HAVE_WPA2_CALLBACKS
     }
-    
+
     packet_buffer(const packet_buffer&) = delete;
     packet_buffer& operator=(const packet_buffer&) = delete;
-    
+
     ~packet_buffer() {
         thread_.join();
     }
-    
+
     void add_packet(unique_pdu pkt) {
         lock_guard<mutex> _(mtx_);
         packet_queue_.push(move(pkt));
         cond_.notify_one();
     }
-    
+
     void stop_running() {
         lock_guard<mutex> _(mtx_);
         cond_.notify_one();
     }
-    
+
     void run() {
         thread_ = thread(&packet_buffer::thread_proc, this);
-    }    
+    }
 private:
     typedef HWAddress<6> address_type;
 
@@ -192,7 +195,7 @@ private:
     bool try_decrypt(Decrypter &decrypter, PDU &pdu) {
         if (decrypter.decrypt(pdu)) {
             auto buffer = pdu.serialize();
-	    writer_.write(pdu);
+	          writer_.write(pdu);
             return true;
         }
         return false;
@@ -243,14 +246,13 @@ public:
     traffic_decrypter(PacketWriter writer, Crypto::WPA2Decrypter wpa2d, 
                       Crypto::WEPDecrypter wepd)
     : bufferer_(move(writer), move(wpa2d), move(wepd)) {
-        
     }
-    
     void decrypt_traffic(Sniffer &sniffer) {
         using std::placeholders::_1;
-        
         bufferer_.run();
-        sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1));
+        //Sniffer should stop after 600 secs
+        sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 600);
+        //sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1));
         bufferer_.stop_running();
     }
 private:
@@ -273,15 +275,12 @@ void if_up(const char *name) {
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
     strncpy(ifr.ifr_name, name, IFNAMSIZ);
-   
     if ((err = ioctl(fd, SIOCGIFFLAGS, (void *) &ifr)) < 0) {
         close(fd);
         cout << strerror(errno) << endl;
         throw runtime_error("Failed get flags");
     }
-   
     ifr.ifr_flags |= IFF_UP|IFF_RUNNING;
-   
     if ((err = ioctl(fd, SIOCSIFFLAGS, (void *) &ifr)) < 0) {
         close(fd);
         cout << strerror(errno) << endl;
@@ -316,7 +315,7 @@ tuple<unique_fd, string> create_tap_dev() {
 void sig_handler(int) {
     if (running) {
         cout << "Stopping the sniffer...\n";
-        running = false; 
+        running = false;
     }
 }
 
@@ -324,15 +323,30 @@ void sig_handler(int) {
 typedef tuple<Crypto::WPA2Decrypter, Crypto::WEPDecrypter> decrypter_tuple;
 
 // Creates a traffic_decrypter and puts it to work
-void decrypt_traffic(const string &output_file, const string &iface, decrypter_tuple tup) {
-    Sniffer sniffer(iface, 2500, false);
+void decrypt_traffic(const string &output_file, Sniffer &sniffer, decrypter_tuple tup) {
     PacketWriter writer(output_file, DataLinkType<RadioTap>());
     traffic_decrypter decrypter(
-        move(writer), 
-        move(get<0>(tup)), 
+        move(writer),
+        move(get<0>(tup)),
         move(get<1>(tup))
     );
     decrypter.decrypt_traffic(sniffer);
+}
+
+// Creates a traffic_decrypter and puts it to work
+void continuous_decrypt(Sniffer &sniffer, decrypter_tuple tup) {
+    int file_num = 0;
+    while(true) {
+      ++file_num;
+      const string output_file = "test-" + std::to_string(file_num) + ".pcap";
+      PacketWriter writer(output_file, DataLinkType<RadioTap>());
+      traffic_decrypter decrypter(
+        move(writer),
+        move(get<0>(tup)),
+        move(get<1>(tup))
+      );
+      decrypter.decrypt_traffic(sniffer);
+    }
 }
 
 // parses the arguments and returns a tuple (WPA2Decrypter, WEPDectyper)
@@ -369,8 +383,9 @@ decrypter_tuple parse_args(const vector<string> &args) {
     return tup;
 }
 
+
 void print_usage(const char *arg0){
-    cout << "Usage: " << arg0 << " <interface> DECRYPTION_DATA [DECRYPTION_DATA] [...]\n\n";
+    cout << "Usage: " << arg0 << " <interface (monitor)> DECRYPTION_DATA [DECRYPTION_DATA] [...]\n\n";
     cout << "Where DECRYPTION_DATA can be: \n";
     cout << "\twpa:SSID:PSK - to specify WPA2(AES or TKIP) decryption data.\n";
     cout << "\twep:BSSID:KEY - to specify WEP decryption data.\n\n";
@@ -380,16 +395,29 @@ void print_usage(const char *arg0){
     exit(1);
 }
 
-int main(int argc, char *argv[]) 
+int main(int argc, char *argv[])
 {
     if (argc < 3) {
         print_usage(*argv);
     }
     try {
         auto decrypters = parse_args(vector<string>(argv + 2, argv + argc));
-        const string output_file("/tmp/foo.pcap");
+        const string monitoring_interface(argv[1]);
+        const string output_file_prefix("test");
+        const string output_dir("/tmp/testdir");
+        const int capture_time_secs = 60*10;
+        Sniffer sniffer(monitoring_interface, 2500, false);
         running = true;
-        decrypt_traffic(move(output_file), argv[1], move(decrypters));
+        signal(SIGINT, sig_handler);
+        continuous_decrypt(sniffer, move(decrypters));
+        //decrypt_traffic(move(output_file), sniffer, move(decrypters));
+        //decrypt_traffic(move(output_file), argv[1], move(decrypters));
+        //string dev_name;
+        //unique_fd fd;
+        //tie(fd, dev_name) = create_tap_dev();
+        //cout << "Using device: " << dev_name << endl;
+        //if_up(dev_name.c_str());
+        //cout << "Device is up.\n";
         cout << "Done\n";
     }
     catch(invalid_argument& ex) {
