@@ -79,6 +79,7 @@ using Tins::pdu_not_found;
 using Tins::PacketWriter;
 // our running flag
 atomic<bool> running;
+atomic<bool> decrypt_running;
 
 // unique_fd - just a wrapper over a file descriptor which closes
 // the fd in its dtor. non-copyable but movable
@@ -202,24 +203,29 @@ private:
     }
 
     void thread_proc() {
-        while (running) {
+        while (decrypt_running) {
+	    //cout << "Running thread_proc\n";
             unique_pdu pkt;
             // critical section
             {
                 unique_lock<mutex> lock(mtx_);
-                if (!running) {
+                if (!decrypt_running) {
                     return;
                 }
                 if (packet_queue_.empty()) {
+	    	    //cout << "Packet queue empty so waiting\n";
                     cond_.wait(lock);
+	    	    //cout << "Done waiting\n";
                     // if it's still empty, then we're done
                     if (packet_queue_.empty()) {
+	    		//cout << "Packet queue empty so returning\n";
                         return;
                     }
                 }
                 pkt = move(packet_queue_.front());
                 packet_queue_.pop();
             }
+	    //cout << "Trying to decrypt\n";
             // non-critical section
             if (!try_decrypt(wpa2_decrypter_, *pkt.get())) {
                 try_decrypt(wep_decrypter_, *pkt.get());
@@ -251,9 +257,12 @@ public:
         using std::placeholders::_1;
         bufferer_.run();
         //Sniffer should stop after 600 secs
-        sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 600);
+        //cout << "Starting sniff loop\n";
+        sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 300);
+        //cout << "Stopping sniff loop\n";
         //sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1));
         bufferer_.stop_running();
+        //cout << "Stopped bufferer and returning\n";
     }
 private:
     bool callback(PDU &pdu) {
@@ -261,7 +270,7 @@ private:
             throw runtime_error("Expected an 802.11 interface in monitor mode");
         }
         bufferer_.add_packet(packet_buffer::unique_pdu(pdu.clone()));
-        return running;
+        return decrypt_running;
     }
 
     packet_buffer bufferer_;
@@ -316,6 +325,7 @@ void sig_handler(int) {
     if (running) {
         cout << "Stopping the sniffer...\n";
         running = false;
+	decrypt_running = false;
     }
 }
 
@@ -336,17 +346,22 @@ void decrypt_traffic(const string &output_file, Sniffer &sniffer, decrypter_tupl
 // Creates a traffic_decrypter and puts it to work
 void continuous_decrypt(Sniffer &sniffer, decrypter_tuple tup) {
     int file_num = 0;
-    while(true) {
+    while(running) {
       ++file_num;
       const string output_file = "test-" + std::to_string(file_num) + ".pcap";
+      cout << "Writing to file:" << output_file << endl;
       PacketWriter writer(output_file, DataLinkType<RadioTap>());
       traffic_decrypter decrypter(
         move(writer),
         move(get<0>(tup)),
         move(get<1>(tup))
       );
+      decrypt_running = true;
       decrypter.decrypt_traffic(sniffer);
+      decrypt_running = false;
+      cout << "Done\n";
     }
+    cout << "Done with continuous decrypt\n";
 }
 
 // parses the arguments and returns a tuple (WPA2Decrypter, WEPDectyper)

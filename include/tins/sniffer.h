@@ -44,6 +44,9 @@
 #include "macros.h"
 #include "exceptions.h"
 #include "internals.h"
+using std::endl;
+using std::cout;
+
 
 namespace Tins {
 class SnifferIterator;
@@ -646,6 +649,7 @@ void Tins::BaseSniffer::sniff_loop(Functor function, uint32_t max_packets, uint3
         if (max_time_secs > 0) {
           current = std::chrono::system_clock::now();
           std::chrono::duration<double> elapsed_seconds = current - start;
+	  //cout << "epapsed sec: " << elapsed_seconds.count() << " max_sec: " << max_time_secs << endl;
           if ((uint32_t)elapsed_seconds.count() > max_time_secs) { 
             return;
           }
