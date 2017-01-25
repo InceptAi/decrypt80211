@@ -147,6 +147,19 @@ public:
         #endif // TINS_HAVE_WPA2_CALLBACKS
     }
 
+    packet_buffer(Crypto::WPA2Decrypter wpa2d,
+                  Crypto::WEPDecrypter wepd)
+    : wpa2_decrypter_(move(wpa2d)), wep_decrypter_(move(wepd)) {
+        // Requires libtins 3.4
+        #ifdef TINS_HAVE_WPA2_CALLBACKS
+        using namespace std::placeholders;
+        wpa2_decrypter_.ap_found_callback(bind(&packet_buffer::on_ap_found, this, _1, _2));
+        wpa2_decrypter_.handshake_captured_callback(bind(&packet_buffer::on_handshake_captured,
+                                                         this, _1, _2, _3));
+        #endif // TINS_HAVE_WPA2_CALLBACKS
+    }
+
+
     packet_buffer(const packet_buffer&) = delete;
     packet_buffer& operator=(const packet_buffer&) = delete;
 
@@ -168,6 +181,15 @@ public:
     void run() {
         thread_ = thread(&packet_buffer::thread_proc, this);
     }
+
+    void set_writer(PacketWriter &new_writer) {
+      //Delete old writer
+      delete writer_;
+      //Subsitute with new writer
+      writer_ = new_writer;
+      cout << "Set new writer\n";
+    }
+
 private:
     typedef HWAddress<6> address_type;
 
@@ -194,6 +216,10 @@ private:
 
     template<typename Decrypter>
     bool try_decrypt(Decrypter &decrypter, PDU &pdu) {
+        if (!writer_) {
+          cout << "Writer not set, so returning\n";
+          return false;
+        }
         if (decrypter.decrypt(pdu)) {
             auto buffer = pdu.serialize();
 	          writer_.write(pdu);
@@ -249,21 +275,41 @@ private:
 
 class traffic_decrypter {
 public:
-    traffic_decrypter(PacketWriter writer, Crypto::WPA2Decrypter wpa2d, 
+    traffic_decrypter(PacketWriter writer, Crypto::WPA2Decrypter wpa2d,
                       Crypto::WEPDecrypter wepd)
     : bufferer_(move(writer), move(wpa2d), move(wepd)) {
     }
+
+    traffic_decrypter(Crypto::WPA2Decrypter wpa2d,
+                      Crypto::WEPDecrypter wepd)
+    : bufferer_(move(wpa2d), move(wepd)) {
+    }
+
     void decrypt_traffic(Sniffer &sniffer) {
         using std::placeholders::_1;
         bufferer_.run();
-        //Sniffer should stop after 600 secs
-        //cout << "Starting sniff loop\n";
         sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 300);
-        //cout << "Stopping sniff loop\n";
-        //sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1));
         bufferer_.stop_running();
-        //cout << "Stopped bufferer and returning\n";
     }
+
+    void decrypt_traffic_continuous(Sniffer &sniffer) {
+        int file_num = 0;
+        while (running) {
+          ++file_num;
+          const string output_file = "test-" + std::to_string(file_num) + ".pcap";
+          cout << "Writing to file:" << output_file << endl;
+          PacketWriter new_writer(output_file, DataLinkType<RadioTap>());
+          using std::placeholders::_1;
+          bufferer_.set_writer(new_writer);
+          decrypt_running = true;
+          bufferer_.run();
+          sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 300);
+          bufferer_.stop_running();
+          decrypt_running = false;
+        }
+    }
+
+
 private:
     bool callback(PDU &pdu) {
         if (pdu.find_pdu<Dot11>() == nullptr && pdu.find_pdu<RadioTap>() == nullptr) {
@@ -325,7 +371,7 @@ void sig_handler(int) {
     if (running) {
         cout << "Stopping the sniffer...\n";
         running = false;
-	decrypt_running = false;
+	      decrypt_running = false;
     }
 }
 
@@ -345,13 +391,18 @@ void decrypt_traffic(const string &output_file, Sniffer &sniffer, decrypter_tupl
 
 // Creates a traffic_decrypter and puts it to work
 void continuous_decrypt(Sniffer &sniffer, decrypter_tuple tup) {
-    int file_num = 0;
+    traffic_decrypter decrypter(
+        move(get<0>(tup)),
+        move(get<1>(tup))
+    );
+    decrypter.decrypt_traffic_continuous(sniffer);
+    /*
     while(running) {
       ++file_num;
       const string output_file = "test-" + std::to_string(file_num) + ".pcap";
       cout << "Writing to file:" << output_file << endl;
       PacketWriter writer(output_file, DataLinkType<RadioTap>());
-      traffic_decrypter decrypter(
+      decrypter_ = traffic_decrypter(
         move(writer),
         move(get<0>(tup)),
         move(get<1>(tup))
@@ -361,6 +412,7 @@ void continuous_decrypt(Sniffer &sniffer, decrypter_tuple tup) {
       decrypt_running = false;
       cout << "Done\n";
     }
+    */
     cout << "Done with continuous decrypt\n";
 }
 
