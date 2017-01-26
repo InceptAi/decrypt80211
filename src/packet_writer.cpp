@@ -37,19 +37,56 @@
 #include "exceptions.h"
 
 using std::string;
+using std::cout;
 
 namespace Tins {
 
+PacketWriter::PacketWriter() {
+    handle_ = nullptr;
+    dumper_ = nullptr;
+    lt_ = INVALID;
+    output_file_name_ = std::string("dummy");
+    //cout << "In empty constructor\n";
+    //printf("ctor: this=%p\n", this);
+}
+
 PacketWriter::PacketWriter(const string& file_name, LinkType lt) {
+    //cout << "PacketWriter::full_constructor input file:" << file_name << "\n";
     init(file_name, lt);
 }
 
 PacketWriter::~PacketWriter() {
+    //cout << "PacketWriter::Destructor file:" << output_file_name_ << "\n";
+   //printf("ctor: this=%p\n", this);
     if (dumper_ && handle_) {
+    	//cout << "Closing handles for file:" << output_file_name_ << "\n";
         pcap_dump_close(dumper_);
         pcap_close(handle_);
     }
 }
+
+void PacketWriter::close_writer() {
+    //cout << "PacketWriter::close_writer file:" << output_file_name_ << "\n";
+    //printf("ctor: this=%p\n", this);
+    if (dumper_ && handle_) {
+    	//cout << "Dumper/handler set, closing writer for file:" << output_file_name_ << "\n";
+        pcap_dump_close(dumper_);
+        pcap_close(handle_);
+    }
+    dumper_ = nullptr;
+    handle_ = nullptr;
+}
+
+
+void PacketWriter::change_output_file(const string &new_output_file_name) {
+    //cout << "Changing output file name. Old file:" << output_file_name_ << " new file:" << new_output_file_name << "\n";
+    close_writer();
+    init(new_output_file_name, lt_);
+    //cout << "Changing output file name. New file:" << output_file_name_ << "\n";
+}
+
+
+
 
 void PacketWriter::write(PDU& pdu) {
     timeval tv;
@@ -89,6 +126,23 @@ void PacketWriter::init(const string& file_name, int link_type) {
         pcap_close(handle_);
         throw pcap_error(pcap_geterr(handle_));
     }
+//    output_file_name_ = std::string(file_name.c_str());
+   output_file_name_ = file_name; 
+   lt_ = (LinkType)link_type;
+   //cout << "PacketWriter::init output_file:" << output_file_name_ << "\n";
+   //printf("ctor: this=%p\n", this);
+}
+
+bool PacketWriter::is_handle_set() {
+    if (!handle_) {
+      return false;
+    } else {
+      return true;
+    }
+}
+
+string PacketWriter::get_output_file_name() {
+    return output_file_name_;	 
 }
 
 } // Tins

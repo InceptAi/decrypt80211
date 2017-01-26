@@ -86,13 +86,16 @@ public:
      * written.
      */
     enum LinkType {
+        INVALID = 0,
         RADIOTAP = DLT_IEEE802_11_RADIO,
         DOT11 = DLT_IEEE802_11,
         ETH2 = DLT_EN10MB,
         DOT3 = DLT_EN10MB,
         SLL = DLT_LINUX_SLL
     };
-
+    
+    //Empty packetwriter constructor
+    PacketWriter();
     /**
      * \brief Constructs a PacketWriter.
      *
@@ -157,6 +160,8 @@ public:
             dumper_ = 0;
             std::swap(handle_, rhs.handle_);
             std::swap(dumper_, rhs.dumper_);
+            std::swap(output_file_name_, rhs.output_file_name_);
+            std::swap(lt_, rhs.lt_);
             return* this;
         }
     #endif
@@ -209,6 +214,21 @@ public:
             write(Utils::dereference_until_pdu(*start++));
         }
     }
+    
+    /**
+     * \brief Check if handle_ is null
+     */
+    bool is_handle_set();
+    /**
+     * \brief Get file name for writing
+     */
+    std::string get_output_file_name();
+    /**
+     * \brief Close file gracefully
+     */
+    void close_writer();
+    void change_output_file(const std::string &new_output_file);
+ 
 private:
     // You shall not copy
     PacketWriter(const PacketWriter&);
@@ -218,7 +238,9 @@ private:
     void write(PDU& pdu, const struct timeval& tv);
 
     pcap_t* handle_;
-    pcap_dumper_t* dumper_; 
+    pcap_dumper_t* dumper_;
+    std::string output_file_name_;
+    LinkType lt_; 
 };
 }
 

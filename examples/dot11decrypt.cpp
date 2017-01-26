@@ -147,24 +147,13 @@ public:
         #endif // TINS_HAVE_WPA2_CALLBACKS
     }
 
-    packet_buffer(Crypto::WPA2Decrypter wpa2d,
-                  Crypto::WEPDecrypter wepd)
-    : wpa2_decrypter_(move(wpa2d)), wep_decrypter_(move(wepd)) {
-        // Requires libtins 3.4
-        #ifdef TINS_HAVE_WPA2_CALLBACKS
-        using namespace std::placeholders;
-        wpa2_decrypter_.ap_found_callback(bind(&packet_buffer::on_ap_found, this, _1, _2));
-        wpa2_decrypter_.handshake_captured_callback(bind(&packet_buffer::on_handshake_captured,
-                                                         this, _1, _2, _3));
-        #endif // TINS_HAVE_WPA2_CALLBACKS
-    }
-
-
     packet_buffer(const packet_buffer&) = delete;
     packet_buffer& operator=(const packet_buffer&) = delete;
 
     ~packet_buffer() {
-        thread_.join();
+	if (thread_.joinable())
+    	    thread_.join();
+        //thread_.join();
     }
 
     void add_packet(unique_pdu pkt) {
@@ -178,16 +167,16 @@ public:
         cond_.notify_one();
     }
 
+    void wait_for_thread() {
+    	thread_.join();
+    }
+    
     void run() {
         thread_ = thread(&packet_buffer::thread_proc, this);
     }
 
-    void set_writer(PacketWriter &new_writer) {
-      //Delete old writer
-      delete writer_;
-      //Subsitute with new writer
-      writer_ = new_writer;
-      cout << "Set new writer\n";
+    void change_output_file(const string &new_output_file) {
+	writer_.change_output_file(new_output_file);	
     }
 
 private:
@@ -216,21 +205,22 @@ private:
 
     template<typename Decrypter>
     bool try_decrypt(Decrypter &decrypter, PDU &pdu) {
-        if (!writer_) {
+        if (!writer_.is_handle_set()) {
           cout << "Writer not set, so returning\n";
           return false;
         }
         if (decrypter.decrypt(pdu)) {
             auto buffer = pdu.serialize();
-	          writer_.write(pdu);
+	    writer_.write(pdu);
             return true;
         }
+	//Unable to decrypt, still write
+	//writer_.write(pdu); 
         return false;
     }
 
     void thread_proc() {
         while (decrypt_running) {
-	    //cout << "Running thread_proc\n";
             unique_pdu pkt;
             // critical section
             {
@@ -239,19 +229,15 @@ private:
                     return;
                 }
                 if (packet_queue_.empty()) {
-	    	    //cout << "Packet queue empty so waiting\n";
                     cond_.wait(lock);
-	    	    //cout << "Done waiting\n";
                     // if it's still empty, then we're done
                     if (packet_queue_.empty()) {
-	    		//cout << "Packet queue empty so returning\n";
                         return;
                     }
                 }
                 pkt = move(packet_queue_.front());
                 packet_queue_.pop();
             }
-	    //cout << "Trying to decrypt\n";
             // non-critical section
             if (!try_decrypt(wpa2_decrypter_, *pkt.get())) {
                 try_decrypt(wep_decrypter_, *pkt.get());
@@ -280,11 +266,6 @@ public:
     : bufferer_(move(writer), move(wpa2d), move(wepd)) {
     }
 
-    traffic_decrypter(Crypto::WPA2Decrypter wpa2d,
-                      Crypto::WEPDecrypter wepd)
-    : bufferer_(move(wpa2d), move(wepd)) {
-    }
-
     void decrypt_traffic(Sniffer &sniffer) {
         using std::placeholders::_1;
         bufferer_.run();
@@ -298,14 +279,16 @@ public:
           ++file_num;
           const string output_file = "test-" + std::to_string(file_num) + ".pcap";
           cout << "Writing to file:" << output_file << endl;
-          PacketWriter new_writer(output_file, DataLinkType<RadioTap>());
           using std::placeholders::_1;
-          bufferer_.set_writer(new_writer);
+          //bufferer_.set_writer(output_file);
+          bufferer_.change_output_file(output_file);
           decrypt_running = true;
           bufferer_.run();
-          sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 300);
+          sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 10);
           bufferer_.stop_running();
           decrypt_running = false;
+          bufferer_.wait_for_thread();
+	  cout << "Done writing\n";
         }
     }
 
@@ -390,8 +373,9 @@ void decrypt_traffic(const string &output_file, Sniffer &sniffer, decrypter_tupl
 }
 
 // Creates a traffic_decrypter and puts it to work
-void continuous_decrypt(Sniffer &sniffer, decrypter_tuple tup) {
+void continuous_decrypt(Sniffer &sniffer, PacketWriter &writer, decrypter_tuple tup) {
     traffic_decrypter decrypter(
+	move(writer),
         move(get<0>(tup)),
         move(get<1>(tup))
     );
@@ -470,13 +454,14 @@ int main(int argc, char *argv[])
     try {
         auto decrypters = parse_args(vector<string>(argv + 2, argv + argc));
         const string monitoring_interface(argv[1]);
-        const string output_file_prefix("test");
+        const string output_file("test-0.pcap");
         const string output_dir("/tmp/testdir");
-        const int capture_time_secs = 60*10;
+        //const int capture_time_secs = 60*10;
         Sniffer sniffer(monitoring_interface, 2500, false);
+	PacketWriter writer(output_file, DataLinkType<RadioTap>());
         running = true;
         signal(SIGINT, sig_handler);
-        continuous_decrypt(sniffer, move(decrypters));
+        continuous_decrypt(sniffer, writer, move(decrypters));
         //decrypt_traffic(move(output_file), sniffer, move(decrypters));
         //decrypt_traffic(move(output_file), argv[1], move(decrypters));
         //string dev_name;
