@@ -279,14 +279,21 @@ public:
         bufferer_.stop_running();
     }
 
-    void decrypt_traffic_continuous(Sniffer &sniffer, const string &output_file_prefix,
-      const string &output_dir, int total_capture_time, int capture_time_per_file) {
-        std::chrono::time_point<std::chrono::system_clock> start, current;
+    void decrypt_traffic_continuous(Sniffer &sniffer, string &output_file_prefix,
+      string &output_dir, int total_capture_time, int capture_time_per_file) {
+        std::chrono::time_point<std::chrono::system_clock> start, current, file_start;
         start = std::chrono::system_clock::now();
         int file_num = 0;
         while (running) {
           ++file_num;
-          const string output_file = output_dir + "/" + output_file_prefix + std::to_string(file_num) + ".pcap";
+          file_start = std::chrono::system_clock::now();
+	  std::time_t file_start_time = std::chrono::system_clock::to_time_t(file_start);
+	  string date_string(std::ctime(&file_start_time));
+	  std::replace(date_string.begin(), date_string.end(), ' ', '_');
+	  date_string.erase(std::remove(date_string.begin(), date_string.end(), '\n'), date_string.end());
+          //const string output_file = output_dir + "/" + output_file_prefix + std::to_string(file_num) + ".pcap";
+	  cout << "file num:" << file_num << " name:" << date_string << endl;
+          const string output_file = output_dir + "/" + output_file_prefix + "_" + date_string + ".pcap";
           cout << "Writing to file:" << output_file << endl;
           using std::placeholders::_1;
           bufferer_.change_output_file(output_file);
@@ -301,7 +308,7 @@ public:
             current = std::chrono::system_clock::now();
             std::chrono::duration<double> elapsed_seconds = current - start;
             //cout << "epapsed sec: " << elapsed_seconds.count() << " max_sec: " << max_time_secs << endl;
-            if ((uint32_t)elapsed_seconds.count() > total_capture_time) {
+            if ((uint32_t)elapsed_seconds.count() > (uint32_t)total_capture_time) {
               break;
             }
           }
@@ -392,8 +399,8 @@ void decrypt_traffic(const string &output_file, Sniffer &sniffer, decrypter_tupl
 }
 
 // Creates a traffic_decrypter and puts it to work
-void continuous_decrypt(Sniffer &sniffer, PacketWriter &writer, decrypter_tuple tup, const string &output_file_prefix,
-     const string &output_dir, int total_capture_time, int capture_time_per_file, bool save_decrypted_only) {
+void continuous_decrypt(Sniffer &sniffer, PacketWriter &writer, decrypter_tuple tup, string &output_file_prefix,
+     string &output_dir, int total_capture_time, int capture_time_per_file, bool save_decrypted_only) {
     traffic_decrypter decrypter(
 	      move(writer),
         move(get<0>(tup)),
@@ -410,7 +417,8 @@ void continuous_decrypt(Sniffer &sniffer, PacketWriter &writer, decrypter_tuple 
 decrypter_tuple parse_args(const vector<string> &args) {
     decrypter_tuple tup;
     for (const auto &i : args) {
-        if (i.find("wpa:") == 0) {
+        cout << "dec tuples: " << i << endl;
+	if (i.find("wpa:") == 0) {
             auto pos = i.find(':', 4);
             if (pos != string::npos) {
                 get<0>(tup).add_ap_data(
@@ -451,21 +459,20 @@ void print_usage(const char *arg0){
     exit(1);
 }
 
-enum ArgParsingReturnValues {
-  SUCCESS = 0;
-  ERROR_IN_COMMAND_LINE = 1;
-  ERROR_UNHANDLED_EXCEPTION = 2;
-};
+typedef enum ArgParsingReturnValues_ {
+  SUCCESS = 0,
+  ERROR_IN_COMMAND_LINE = 1,
+  ERROR_UNHANDLED_EXCEPTION = 2
+}ArgParsingReturnValues;
 
 int main(int argc, char** argv)
 {
   try
   {
-    std::string appName = boost::filesystem::basename(argv[0]);
     std::vector<std::string> decryption_infos;
-    const string monitoring_interface;
-    const string output_file_prefix("test");
-    const string output_dir("/tmp");
+    string monitoring_interface;
+    string output_file_prefix("test");
+    string output_dir("/tmp");
     int total_capture_time = 0;
     int capture_time_per_file = 0;
     bool save_decrypted_packets_only = false;
@@ -476,28 +483,25 @@ int main(int argc, char** argv)
     desc.add_options()
       ("help,h", "Print help messages")
       ("verbose,v", "print words with verbosity")
-      ("decryption_infos,a", po::value<std::vector<std::string> >(&decryption_infos),
-       "Specify the wpa:bssid:password or wep:bssid:password of APs whose packets need to be
-       decrypted, you can specify multiple such combinations\n,
-       Examples: wpa:MyAccessPoint:some_password or wep:00:01:02:03:04:05:blahbleehh")
+      ("ap_infos_for_decryption,a", po::value<std::vector<std::string> >(&decryption_infos),
+       "Specify the wpa:bssid:password or wep:bssid:password of APs whose packets need to be decrypted, you can specify multiple such combinations. Examples: wpa:MyAccessPoint:some_password or wep:00:01:02:03:04:05:blahbleehh")
       ("prefix,p", po::value<std::string>(&output_file_prefix)->default_value("trace"),
        "prefix for trace files, will produce files like <PREFIX-0.pcap>")
-      ("outputdir,d", po::value<std::string>(&output_dir)->default_value("/tmp"),
+      ("outputdir,o", po::value<std::string>(&output_dir)->default_value("/tmp"),
        "prefix for trace files, will produce files like <PREFIX-0.pcap>")
-      ("monitoriface,i", po::value<std::string>(&monitoring_interface)->required(),
-       "monitoring interface for capture")
-      ("decrypted_only,e", "Capture only decrypted 802.11 frames")
-      ("captime,c", po::value<int>(total_capture_time)->default_value(0),
+      ("interface_to_monitor,i", po::value<std::string>(&monitoring_interface)->required(),
+       "monitoring interface for capture (like wlan0)")
+      ("decrypted_packets_only,d", "Capture only decrypted 802.11 frames")
+      ("capture_time,c", po::value<int>(&total_capture_time)->default_value(0),
        "total capture time in secs (def. 0 will capture infinitely)")
-      ("timeperfile,t", po::value<int>(capture_time_per_file)->default_value(0),
+      ("time_captured_per_file_before_rotation,t", po::value<int>(&capture_time_per_file)->default_value(0),
        "capture time per file in secs (def. 0 will capture in one file forever)");
 
     po::variables_map vm;
 
     try
     {
-      po::store(po::command_line_parser(argc, argv).options(desc)
-      .positional(positionalOptions).run(), vm); // throws on error
+      po::store(po::command_line_parser(argc, argv).options(desc).run(), vm); // throws on error
 
       /** --help option
        */
@@ -505,46 +509,47 @@ int main(int argc, char** argv)
       {
         std::cout << "802.11 decryption tool" << std::endl;
         std::cout << desc << std::endl;
-        return SUCCESS;
+        return (ArgParsingReturnValues)SUCCESS;
       }
       po::notify(vm); // throws on error, so do after help in case
       // there are any problems
     }
     catch(boost::program_options::required_option& e)
     {
-      rad::OptionPrinter::formatRequiredOptionError(e);
       std::cerr << "ERROR: " << e.what() << std::endl << std::endl;
-      return ERROR_IN_COMMAND_LINE;
+      std::cout << desc << std::endl;
+      return (ArgParsingReturnValues)ERROR_IN_COMMAND_LINE;
     }
     catch(boost::program_options::error& e)
     {
       std::cerr << "ERROR: " << e.what() << std::endl << std::endl;
-      return ERROR_IN_COMMAND_LINE;
+      std::cout << desc << std::endl;      
+      return (ArgParsingReturnValues)ERROR_IN_COMMAND_LINE;
     }
 
     if ( vm.count("decrypted_only") )
     {
       save_decrypted_packets_only = true;
     }
-
+    // Setup everything and start decryption
+    auto decrypters = parse_args(decryption_infos);
+    Sniffer sniffer(monitoring_interface, 2500, false);
+    const string output_file = output_file_prefix + "-0.pcap";
+    PacketWriter writer(output_file, DataLinkType<RadioTap>());
+    running = true;
+    signal(SIGINT, sig_handler);
+    cout << output_file_prefix << " " << output_dir << " "  << total_capture_time << " " << capture_time_per_file << " " << save_decrypted_packets_only << endl;
+    continuous_decrypt(sniffer, writer, move(decrypters), output_file_prefix, output_dir,
+      total_capture_time, capture_time_per_file, save_decrypted_packets_only);
   }
   catch(std::exception& e)
   {
     std::cerr << "Unhandled Exception reached the top of main: "
       << e.what() << ", application will now exit" << std::endl;
-    return ERROR_UNHANDLED_EXCEPTION;
+    return (ArgParsingReturnValues)ERROR_UNHANDLED_EXCEPTION;
 
   }
-  // Setup everything and start decryption
-  auto decrypters = parse_args(decryption_infos);
-  Sniffer sniffer(monitoring_interface, 2500, false);
-  const string output_file = output_file_prefix + "-0.pcap";
-  PacketWriter writer(output_file, DataLinkType<RadioTap>());
-  running = true;
-  signal(SIGINT, sig_handler);
-  continuous_decrypt(sniffer, writer, move(decrypters), output_file_prefix, output_dir,
-    total_capture_time, capture_time_per_file, save_decrypted_packets_only);
-  return 0;
+  return (ArgParsingReturnValues)SUCCESS;
 }
 
 

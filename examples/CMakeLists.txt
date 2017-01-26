@@ -1,11 +1,16 @@
 FIND_PACKAGE(Threads QUIET)
-FIND_PACKAGE(Boost COMPONENTS regex)
+FIND_PACKAGE(Boost COMPONENTS regex program_options)
 
 SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/examples)
 INCLUDE_DIRECTORIES(
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${PCAP_INCLUDE_DIR}
 )
+
+IF(Boost_FOUND)
+  SET(INCLUDE_DIRECTORIES ${Boost_INCLUDE_DIRS})
+ENDIF()
+
 LINK_LIBRARIES(tins)
 
 IF(TINS_HAVE_CXX11)
@@ -22,7 +27,7 @@ IF(TINS_HAVE_CXX11)
         wps_detect
 	dot11decrypt
     )
-    IF(Boost_REGEX_FOUND)
+    IF(Boost_FOUND)
         SET(LIBTINS_CXX11_EXAMPLES ${LIBTINS_CXX11_EXAMPLES} http_requests)
     ELSE()
         MESSAGE(WARNING "Disabling HTTP requests example since boost.regex was not found")
@@ -56,7 +61,7 @@ IF(TINS_HAVE_CXX11)
     ADD_EXECUTABLE(interfaces_info EXCLUDE_FROM_ALL interfaces_info.cpp)
     ADD_EXECUTABLE(tcp_connection_close EXCLUDE_FROM_ALL tcp_connection_close.cpp)
     ADD_EXECUTABLE(wps_detect EXCLUDE_FROM_ALL wps_detect.cpp)
-    IF (Boost_REGEX_FOUND)
+    IF (Boost_FOUND)
         ADD_EXECUTABLE(http_requests EXCLUDE_FROM_ALL http_requests.cpp)
         TARGET_LINK_LIBRARIES(http_requests ${Boost_LIBRARIES})
     ENDIF()
@@ -68,10 +73,12 @@ if(THREADS_FOUND)
     IF(TINS_HAVE_CXX11)
         ADD_EXECUTABLE(traceroute EXCLUDE_FROM_ALL traceroute.cpp)
         ADD_EXECUTABLE(dns_stats EXCLUDE_FROM_ALL dns_stats.cpp)
-    	ADD_EXECUTABLE(dot11decrypt EXCLUDE_FROM_ALL dot11decrypt.cpp)
         TARGET_LINK_LIBRARIES(traceroute ${CMAKE_THREAD_LIBS_INIT})
         TARGET_LINK_LIBRARIES(dns_stats ${CMAKE_THREAD_LIBS_INIT})
-        TARGET_LINK_LIBRARIES(dot11decrypt ${CMAKE_THREAD_LIBS_INIT})
+    	IF(Boost_FOUND)
+    	    ADD_EXECUTABLE(dot11decrypt EXCLUDE_FROM_ALL dot11decrypt.cpp)
+            TARGET_LINK_LIBRARIES(dot11decrypt ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
+        ENDIF()
     ENDIF(TINS_HAVE_CXX11)
     IF(WIN32)
         MESSAGE(WARNING "Disabling portscan example since it doesn't compile on Windows.")
