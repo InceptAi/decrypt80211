@@ -53,6 +53,7 @@
 //Boost
 #include <boost/program_options.hpp>
 
+
 using namespace Tins;
 
 using std::hex;
@@ -78,6 +79,7 @@ using std::string;
 using std::queue;
 using std::get;
 using std::vector;
+using std::cerr;
 using Tins::pdu_not_found;
 using Tins::PacketWriter;
 // our running flag
@@ -88,46 +90,46 @@ atomic<bool> decrypt_running;
 // the fd in its dtor. non-copyable but movable
 
 class unique_fd {
-public:
+  public:
     static constexpr int invalid_fd = -1;
 
     unique_fd(int fd = invalid_fd)
-    : fd_(fd) {
+      : fd_(fd) {
 
-    }
+      }
 
 
     unique_fd(unique_fd &&rhs)
-    : fd_(invalid_fd) {
+      : fd_(invalid_fd) {
         *this = move(rhs);
-    }
+      }
 
     unique_fd& operator=(unique_fd&& rhs) {
-        if (fd_ != invalid_fd) {
-            ::close(fd_);
-        }
-        fd_ = invalid_fd;
-        swap(fd_, rhs.fd_);
-        return *this;
+      if (fd_ != invalid_fd) {
+        ::close(fd_);
+      }
+      fd_ = invalid_fd;
+      swap(fd_, rhs.fd_);
+      return *this;
     }
 
     ~unique_fd() {
-        if (fd_ != invalid_fd) {
-            ::close(fd_);
-        }
+      if (fd_ != invalid_fd) {
+        ::close(fd_);
+      }
     }
 
     unique_fd(const unique_fd&) = delete;
     unique_fd& operator=(const unique_fd&) = delete;
 
     int operator*() {
-        return fd_;
+      return fd_;
     }
 
     operator bool() const {
-        return fd_ != invalid_fd;
+      return fd_ != invalid_fd;
     }
-private:
+  private:
     int fd_;
 };
 
@@ -135,119 +137,125 @@ private:
 // the interface using an auxiliary thread.
 
 class packet_buffer {
-public:
+  public:
     typedef unique_ptr<PDU> unique_pdu;
 
     packet_buffer(PacketWriter writer, Crypto::WPA2Decrypter wpa2d,
-                  Crypto::WEPDecrypter wepd, bool save_decrypted_only)
-    : writer_(move(writer)), wpa2_decrypter_(move(wpa2d)), wep_decrypter_(move(wepd)) {
+        Crypto::WEPDecrypter wepd, bool save_decrypted_only)
+      : writer_(move(writer)), wpa2_decrypter_(move(wpa2d)), wep_decrypter_(move(wepd)) {
         save_decrypted_pkts_only_ = save_decrypted_only;
         // Requires libtins 3.4
-        #ifdef TINS_HAVE_WPA2_CALLBACKS
+#ifdef TINS_HAVE_WPA2_CALLBACKS
         using namespace std::placeholders;
         wpa2_decrypter_.ap_found_callback(bind(&packet_buffer::on_ap_found, this, _1, _2));
         wpa2_decrypter_.handshake_captured_callback(bind(&packet_buffer::on_handshake_captured,
-                                                         this, _1, _2, _3));
-        #endif // TINS_HAVE_WPA2_CALLBACKS
-    }
+              this, _1, _2, _3));
+#endif // TINS_HAVE_WPA2_CALLBACKS
+      }
 
     packet_buffer(const packet_buffer&) = delete;
     packet_buffer& operator=(const packet_buffer&) = delete;
 
     ~packet_buffer() {
-	if (thread_.joinable())
-    	    thread_.join();
-        //thread_.join();
+      if (thread_.joinable())
+        thread_.join();
+      //thread_.join();
     }
 
     void add_packet(unique_pdu pkt) {
-        lock_guard<mutex> _(mtx_);
-        packet_queue_.push(move(pkt));
-        cond_.notify_one();
+      lock_guard<mutex> _(mtx_);
+      packet_queue_.push(move(pkt));
+      cond_.notify_one();
     }
 
     void stop_running() {
-        lock_guard<mutex> _(mtx_);
-        cond_.notify_one();
+      lock_guard<mutex> _(mtx_);
+      cond_.notify_one();
     }
 
     void wait_for_thread() {
-    	thread_.join();
+      thread_.join();
     }
 
     void run() {
-        thread_ = thread(&packet_buffer::thread_proc, this);
+      thread_ = thread(&packet_buffer::thread_proc, this);
     }
 
     void change_output_file(const string &new_output_file) {
-      	writer_.change_output_file(new_output_file);
+      writer_.change_output_file(new_output_file);
     }
 
-private:
+  private:
     typedef HWAddress<6> address_type;
 
     EthernetII make_eth_packet(Dot11Data &dot11) {
-        if (dot11.from_ds() && !dot11.to_ds()) {
-            return EthernetII(dot11.addr1(), dot11.addr3());
-        }
-        else if (!dot11.from_ds() && dot11.to_ds()) {
-            return EthernetII(dot11.addr3(), dot11.addr2());
-        }
-        else {
-            return EthernetII(dot11.addr1(), dot11.addr2());
-        }
+      if (dot11.from_ds() && !dot11.to_ds()) {
+        return EthernetII(dot11.addr1(), dot11.addr3());
+      }
+      else if (!dot11.from_ds() && dot11.to_ds()) {
+        return EthernetII(dot11.addr3(), dot11.addr2());
+      }
+      else {
+        return EthernetII(dot11.addr1(), dot11.addr2());
+      }
     }
 
     void on_ap_found(const string& ssid, const address_type& bssid) {
-        cout << "AP found: " << ssid << ": " << bssid << endl;
+      cout << "AP found: " << ssid << ": " << bssid << endl;
     }
 
     void on_handshake_captured(const string& ssid, const address_type& bssid,
-                               const address_type& client_hw) {
-        cout << "Captured handshake for " << ssid << " (" << bssid << "): " << client_hw << endl;
+        const address_type& client_hw) {
+      cout << "Captured handshake for " << ssid << " (" << bssid << "): " << client_hw << endl;
     }
 
     template<typename Decrypter>
-    bool try_decrypt(Decrypter &decrypter, PDU &pdu) {
+      bool try_decrypt(Decrypter &decrypter, PDU &pdu) {
         if (!writer_.is_handle_set()) {
           cout << "Writer not set, so returning\n";
           return false;
         }
-        if (decrypter.decrypt(pdu)) {
+        try {
+          if (decrypter.decrypt(pdu)) {
             auto buffer = pdu.serialize();
-	          writer_.write(pdu);
+            writer_.write(pdu);
             return true;
-        } else if (!save_decrypted_pkts_only_) {
-	         //Unable to decrypt, still write
-	         writer_.write(pdu);
+          } else if (!save_decrypted_pkts_only_) {
+            //Unable to decrypt, still write
+            writer_.write(pdu);
+          }
+          return false;
         }
-        return false;
-    }
+        catch (exception& ex) {
+          cerr << "Error: " << ex.what() << endl;
+          return false;
+        }
+      }
 
     void thread_proc() {
-        while (decrypt_running) {
-            unique_pdu pkt;
-            // critical section
-            {
-                unique_lock<mutex> lock(mtx_);
-                if (!decrypt_running) {
-                    return;
-                }
-                if (packet_queue_.empty()) {
-                    cond_.wait(lock);
-                    // if it's still empty, then we're done
-                    if (packet_queue_.empty()) {
-                        return;
-                    }
-                }
-                pkt = move(packet_queue_.front());
-                packet_queue_.pop();
+      while (decrypt_running) {
+        unique_pdu pkt;
+        // critical section
+        {
+          unique_lock<mutex> lock(mtx_);
+          if (!decrypt_running) {
+            return;
+          }
+          if (packet_queue_.empty()) {
+            cond_.wait(lock);
+            // if it's still empty, then we're done
+            if (packet_queue_.empty()) {
+              return;
             }
-            // non-critical section
-            if (!try_decrypt(wpa2_decrypter_, *pkt.get())) {
-                try_decrypt(wep_decrypter_, *pkt.get());
-            }
+          }
+          pkt = move(packet_queue_.front());
+          packet_queue_.pop();
         }
+        // non-critical section
+        if (!try_decrypt(wpa2_decrypter_, *pkt.get())) {
+          try_decrypt(wep_decrypter_, *pkt.get());
+        }
+      }
     }
 
     unique_fd fd_;
@@ -266,64 +274,64 @@ private:
 // bufferer
 
 class traffic_decrypter {
-public:
+  public:
     traffic_decrypter(PacketWriter writer, Crypto::WPA2Decrypter wpa2d,
-                      Crypto::WEPDecrypter wepd, bool save_decrypted_only)
-    : bufferer_(move(writer), move(wpa2d), move(wepd), save_decrypted_only) {
-    }
+        Crypto::WEPDecrypter wepd, bool save_decrypted_only)
+      : bufferer_(move(writer), move(wpa2d), move(wepd), save_decrypted_only) {
+      }
 
     void decrypt_traffic(Sniffer &sniffer) {
-        using std::placeholders::_1;
-        bufferer_.run();
-        sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 300);
-        bufferer_.stop_running();
+      using std::placeholders::_1;
+      bufferer_.run();
+      sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, 300);
+      bufferer_.stop_running();
     }
 
     void decrypt_traffic_continuous(Sniffer &sniffer, string &output_file_prefix,
-      string &output_dir, int total_capture_time, int capture_time_per_file) {
-        std::chrono::time_point<std::chrono::system_clock> start, current, file_start;
-        start = std::chrono::system_clock::now();
-        int file_num = 0;
-        while (running) {
-          ++file_num;
-          file_start = std::chrono::system_clock::now();
-	  std::time_t file_start_time = std::chrono::system_clock::to_time_t(file_start);
-	  string date_string(std::ctime(&file_start_time));
-	  std::replace(date_string.begin(), date_string.end(), ' ', '_');
-	  date_string.erase(std::remove(date_string.begin(), date_string.end(), '\n'), date_string.end());
-          //const string output_file = output_dir + "/" + output_file_prefix + std::to_string(file_num) + ".pcap";
-	  cout << "file num:" << file_num << " name:" << date_string << endl;
-          const string output_file = output_dir + "/" + output_file_prefix + "_" + date_string + ".pcap";
-          cout << "Writing to file:" << output_file << endl;
-          using std::placeholders::_1;
-          bufferer_.change_output_file(output_file);
-          decrypt_running = true;
-          bufferer_.run();
-          sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, capture_time_per_file);
-          bufferer_.stop_running();
-          decrypt_running = false;
-          bufferer_.wait_for_thread();
-          cout << "Done writing\n";
-          if (total_capture_time > 0) {
-            current = std::chrono::system_clock::now();
-            std::chrono::duration<double> elapsed_seconds = current - start;
-            //cout << "epapsed sec: " << elapsed_seconds.count() << " max_sec: " << max_time_secs << endl;
-            if ((uint32_t)elapsed_seconds.count() > (uint32_t)total_capture_time) {
-              break;
-            }
+        string &output_dir, int total_capture_time, int capture_time_per_file) {
+      std::chrono::time_point<std::chrono::system_clock> start, current, file_start;
+      start = std::chrono::system_clock::now();
+      int file_num = 0;
+      while (running) {
+        ++file_num;
+        file_start = std::chrono::system_clock::now();
+        std::time_t file_start_time = std::chrono::system_clock::to_time_t(file_start);
+        string date_string(std::ctime(&file_start_time));
+        std::replace(date_string.begin(), date_string.end(), ' ', '_');
+        date_string.erase(std::remove(date_string.begin(), date_string.end(), '\n'), date_string.end());
+        //const string output_file = output_dir + "/" + output_file_prefix + std::to_string(file_num) + ".pcap";
+        cout << "file num:" << file_num << " name:" << date_string << endl;
+        const string output_file = output_dir + "/" + output_file_prefix + "_" + date_string + ".pcap";
+        cout << "Writing to file:" << output_file << endl;
+        using std::placeholders::_1;
+        bufferer_.change_output_file(output_file);
+        decrypt_running = true;
+        bufferer_.run();
+        sniffer.sniff_loop(bind(&traffic_decrypter::callback, this, _1), 0, capture_time_per_file);
+        bufferer_.stop_running();
+        decrypt_running = false;
+        bufferer_.wait_for_thread();
+        cout << "Done writing\n";
+        if (total_capture_time > 0) {
+          current = std::chrono::system_clock::now();
+          std::chrono::duration<double> elapsed_seconds = current - start;
+          //cout << "epapsed sec: " << elapsed_seconds.count() << " max_sec: " << max_time_secs << endl;
+          if ((uint32_t)elapsed_seconds.count() > (uint32_t)total_capture_time) {
+            break;
           }
         }
-        cout << "Done with the while loop in decrypt_traffic_continuous\n";
+      }
+      cout << "Done with the while loop in decrypt_traffic_continuous\n";
     }
 
 
-private:
+  private:
     bool callback(PDU &pdu) {
-        if (pdu.find_pdu<Dot11>() == nullptr && pdu.find_pdu<RadioTap>() == nullptr) {
-            throw runtime_error("Expected an 802.11 interface in monitor mode");
-        }
-        bufferer_.add_packet(packet_buffer::unique_pdu(pdu.clone()));
-        return decrypt_running;
+      if (pdu.find_pdu<Dot11>() == nullptr && pdu.find_pdu<RadioTap>() == nullptr) {
+        throw runtime_error("Expected an 802.11 interface in monitor mode");
+      }
+      bufferer_.add_packet(packet_buffer::unique_pdu(pdu.clone()));
+      return decrypt_running;
     }
 
     packet_buffer bufferer_;
@@ -334,53 +342,53 @@ private:
 // if_up - brings the interface up
 
 void if_up(const char *name) {
-    int err, fd = socket(AF_INET, SOCK_DGRAM, 0);
-    struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, name, IFNAMSIZ);
-    if ((err = ioctl(fd, SIOCGIFFLAGS, (void *) &ifr)) < 0) {
-        close(fd);
-        cout << strerror(errno) << endl;
-        throw runtime_error("Failed get flags");
-    }
-    ifr.ifr_flags |= IFF_UP|IFF_RUNNING;
-    if ((err = ioctl(fd, SIOCSIFFLAGS, (void *) &ifr)) < 0) {
-        close(fd);
-        cout << strerror(errno) << endl;
-        throw runtime_error("Failed to bring the interface up");
-    }
+  int err, fd = socket(AF_INET, SOCK_DGRAM, 0);
+  struct ifreq ifr;
+  memset(&ifr, 0, sizeof(ifr));
+  strncpy(ifr.ifr_name, name, IFNAMSIZ);
+  if ((err = ioctl(fd, SIOCGIFFLAGS, (void *) &ifr)) < 0) {
+    close(fd);
+    cout << strerror(errno) << endl;
+    throw runtime_error("Failed get flags");
+  }
+  ifr.ifr_flags |= IFF_UP|IFF_RUNNING;
+  if ((err = ioctl(fd, SIOCSIFFLAGS, (void *) &ifr)) < 0) {
+    close(fd);
+    cout << strerror(errno) << endl;
+    throw runtime_error("Failed to bring the interface up");
+  }
 }
 
 // create_tap_dev - creates a tap device
 
 tuple<unique_fd, string> create_tap_dev() {
-    struct ifreq ifr;
-    int err;
-    char clonedev[] = "/dev/net/tun";
-    unique_fd fd = open(clonedev, O_RDWR);
+  struct ifreq ifr;
+  int err;
+  char clonedev[] = "/dev/net/tun";
+  unique_fd fd = open(clonedev, O_RDWR);
 
-    if (!fd) {
-        throw runtime_error("Failed to open /dev/net/tun");
-    }
+  if (!fd) {
+    throw runtime_error("Failed to open /dev/net/tun");
+  }
 
-    memset(&ifr, 0, sizeof(ifr));
+  memset(&ifr, 0, sizeof(ifr));
 
-    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;   
+  ifr.ifr_flags = IFF_TAP | IFF_NO_PI;   
 
-    if ((err = ioctl(*fd, TUNSETIFF, (void *) &ifr)) < 0) {
-        throw runtime_error("Failed to create tap device");
-    }
+  if ((err = ioctl(*fd, TUNSETIFF, (void *) &ifr)) < 0) {
+    throw runtime_error("Failed to create tap device");
+  }
 
-    return make_tuple(move(fd), ifr.ifr_name);
+  return make_tuple(move(fd), ifr.ifr_name);
 }
 
 // sig_handler - SIGINT handler, so we can release resources appropriately
 void sig_handler(int) {
-    if (running) {
-        cout << "Stopping the sniffer...\n";
-        running = false;
-	      decrypt_running = false;
-    }
+  if (running) {
+    cout << "Stopping the sniffer...\n";
+    running = false;
+    decrypt_running = false;
+  }
 }
 
 
@@ -388,75 +396,75 @@ typedef tuple<Crypto::WPA2Decrypter, Crypto::WEPDecrypter> decrypter_tuple;
 
 // Creates a traffic_decrypter and puts it to work
 void decrypt_traffic(const string &output_file, Sniffer &sniffer, decrypter_tuple tup) {
-    PacketWriter writer(output_file, DataLinkType<RadioTap>());
-    traffic_decrypter decrypter(
-        move(writer),
-        move(get<0>(tup)),
-        move(get<1>(tup)),
-        false
-    );
-    decrypter.decrypt_traffic(sniffer);
+  PacketWriter writer(output_file, DataLinkType<RadioTap>());
+  traffic_decrypter decrypter(
+      move(writer),
+      move(get<0>(tup)),
+      move(get<1>(tup)),
+      false
+      );
+  decrypter.decrypt_traffic(sniffer);
 }
 
 // Creates a traffic_decrypter and puts it to work
 void continuous_decrypt(Sniffer &sniffer, PacketWriter &writer, decrypter_tuple tup, string &output_file_prefix,
-     string &output_dir, int total_capture_time, int capture_time_per_file, bool save_decrypted_only) {
-    traffic_decrypter decrypter(
-	      move(writer),
-        move(get<0>(tup)),
-        move(get<1>(tup)),
-        save_decrypted_only
-    );
-    decrypter.decrypt_traffic_continuous(sniffer, output_file_prefix,
+    string &output_dir, int total_capture_time, int capture_time_per_file, bool save_decrypted_only) {
+  traffic_decrypter decrypter(
+      move(writer),
+      move(get<0>(tup)),
+      move(get<1>(tup)),
+      save_decrypted_only
+      );
+  decrypter.decrypt_traffic_continuous(sniffer, output_file_prefix,
       output_dir, total_capture_time, capture_time_per_file);
-    cout << "Done with continuous decrypt\n";
+  cout << "Done with continuous decrypt\n";
 }
 
 // parses the arguments and returns a tuple (WPA2Decrypter, WEPDectyper)
 // throws if arguments are invalid
 decrypter_tuple parse_args(const vector<string> &args) {
-    decrypter_tuple tup;
-    for (const auto &i : args) {
-        cout << "dec tuples: " << i << endl;
-	if (i.find("wpa:") == 0) {
-            auto pos = i.find(':', 4);
-            if (pos != string::npos) {
-                get<0>(tup).add_ap_data(
-                    i.substr(pos + 1), // psk
-                    i.substr(4, pos - 4) // ssid
-                );
-            }
-            else {
-                throw invalid_argument("Invalid decryption data");
-            }
-        }
-        else if (i.find("wep:") == 0) {
-            const auto sz = string("00:00:00:00:00:00").size();
-            if (sz + 4 >= i.size()) {
-                throw invalid_argument("Invalid decryption data");
-            }
-            get<1>(tup).add_password(
-                i.substr(5, sz), // bssid
-                i.substr(5 + sz) // passphrase
+  decrypter_tuple tup;
+  for (const auto &i : args) {
+    cout << "dec tuples: " << i << endl;
+    if (i.find("wpa:") == 0) {
+      auto pos = i.find(':', 4);
+      if (pos != string::npos) {
+        get<0>(tup).add_ap_data(
+            i.substr(pos + 1), // psk
+            i.substr(4, pos - 4) // ssid
             );
-        }
-        else {
-            throw invalid_argument("Expected decription data.");
-        }
+      }
+      else {
+        throw invalid_argument("Invalid decryption data");
+      }
     }
-    return tup;
+    else if (i.find("wep:") == 0) {
+      const auto sz = string("00:00:00:00:00:00").size();
+      if (sz + 4 >= i.size()) {
+        throw invalid_argument("Invalid decryption data");
+      }
+      get<1>(tup).add_password(
+          i.substr(5, sz), // bssid
+          i.substr(5 + sz) // passphrase
+          );
+    }
+    else {
+      throw invalid_argument("Expected decription data.");
+    }
+  }
+  return tup;
 }
 
 
 void print_usage(const char *arg0){
-    cout << "Usage: " << arg0 << " <interface (monitor)> DECRYPTION_DATA [DECRYPTION_DATA] [...]\n\n";
-    cout << "Where DECRYPTION_DATA can be: \n";
-    cout << "\twpa:SSID:PSK - to specify WPA2(AES or TKIP) decryption data.\n";
-    cout << "\twep:BSSID:KEY - to specify WEP decryption data.\n\n";
-    cout << "Examples:\n";
-    cout << "\t" << arg0 << " wlan0 wpa:MyAccessPoint:some_password\n";
-    cout << "\t" << arg0 << " mon0 wep:00:01:02:03:04:05:blahbleehh\n";
-    exit(1);
+  cout << "Usage: " << arg0 << " <interface (monitor)> DECRYPTION_DATA [DECRYPTION_DATA] [...]\n\n";
+  cout << "Where DECRYPTION_DATA can be: \n";
+  cout << "\twpa:SSID:PSK - to specify WPA2(AES or TKIP) decryption data.\n";
+  cout << "\twep:BSSID:KEY - to specify WEP decryption data.\n\n";
+  cout << "Examples:\n";
+  cout << "\t" << arg0 << " wlan0 wpa:MyAccessPoint:some_password\n";
+  cout << "\t" << arg0 << " mon0 wep:00:01:02:03:04:05:blahbleehh\n";
+  exit(1);
 }
 
 typedef enum ArgParsingReturnValues_ {
@@ -473,6 +481,7 @@ int main(int argc, char** argv)
     string monitoring_interface;
     string output_file_prefix("test");
     string output_dir("/tmp");
+    int executable_version = 1;
     int total_capture_time = 0;
     int capture_time_per_file = 0;
     bool save_decrypted_packets_only = false;
@@ -507,7 +516,7 @@ int main(int argc, char** argv)
        */
       if ( vm.count("help")  )
       {
-        std::cout << "802.11 decryption tool" << std::endl;
+        std::cout << "802.11 decryption tool (Version:" << executable_version << ")" << std::endl;
         std::cout << desc << std::endl;
         return (ArgParsingReturnValues)SUCCESS;
       }
@@ -517,12 +526,14 @@ int main(int argc, char** argv)
     catch(boost::program_options::required_option& e)
     {
       std::cerr << "ERROR: " << e.what() << std::endl << std::endl;
+      std::cout << "802.11 decryption tool (Version:" << executable_version << ")" << std::endl;
       std::cout << desc << std::endl;
       return (ArgParsingReturnValues)ERROR_IN_COMMAND_LINE;
     }
     catch(boost::program_options::error& e)
     {
       std::cerr << "ERROR: " << e.what() << std::endl << std::endl;
+      std::cout << "802.11 decryption tool (Version:" << executable_version << ")" << std::endl;
       std::cout << desc << std::endl;      
       return (ArgParsingReturnValues)ERROR_IN_COMMAND_LINE;
     }
@@ -540,7 +551,7 @@ int main(int argc, char** argv)
     signal(SIGINT, sig_handler);
     cout << output_file_prefix << " " << output_dir << " "  << total_capture_time << " " << capture_time_per_file << " " << save_decrypted_packets_only << endl;
     continuous_decrypt(sniffer, writer, move(decrypters), output_file_prefix, output_dir,
-      total_capture_time, capture_time_per_file, save_decrypted_packets_only);
+        total_capture_time, capture_time_per_file, save_decrypted_packets_only);
   }
   catch(std::exception& e)
   {
