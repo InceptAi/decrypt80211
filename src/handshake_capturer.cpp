@@ -37,6 +37,8 @@ using std::max_element;
 using std::max;
 using std::min;
 using std::pair;
+using std::cout;
+using std::endl;
 
 namespace Tins {
 
@@ -44,7 +46,12 @@ bool RSNHandshakeCapturer::process_packet(const PDU& pdu) {
     const RSNEAPOL* eapol = pdu.find_pdu<RSNEAPOL>();
     const Dot11Data* dot11 = pdu.find_pdu<Dot11Data>();
     if (!eapol || !dot11) {
+        // cout << "Early return from RSNHandshakeCapturer." << endl;
         return false;
+    }
+
+    if (eapol) {
+        cout << "Found EAPOL packet." << endl;
     }
     
     // Use this to identify each flow, regardless of the direction
@@ -54,16 +61,29 @@ bool RSNHandshakeCapturer::process_packet(const PDU& pdu) {
         
     // 1st packet
     if (eapol->key_t() && eapol->key_ack() && !eapol->key_mic() && !eapol->install()) {
+        cout << "First packet." << endl;
         handshakes_[addresses].assign(eapol, eapol + 1);
     }
     // 2nd and 4th packets
     else if (eapol->key_t() && !eapol->key_ack() && eapol->key_mic() && !eapol->install()) {
+        cout << "EAPOL key length:" << eapol->key_length() << endl;
+        cout << "EAPOL wpa length:" << eapol->wpa_length() << endl;
+        cout << "EAPOL length:" << eapol->length() << endl;
+        // Comment from epan-dissectors-packet-ieee80211.c from wireshark:
+        /* We check the key length to differentiate between message 2 and 4 and just hope that
+           there are no strange implementations with key data and non-zero key length in message 4.
+           According to the IEEE specification, sections 11.6.6.3 and 11.6.6.5 we should
+           use the Secure Bit and/or the Nonce, but there are implementations ignoring the spec.
+           The Secure Bit is incorrectly set on rekeys for Windows clients for Message 2 and the Nonce is non-zero
+           in Message 4 in Bug 11994 (Apple?) */
         // 2nd packet won't have the secure bit set
-        if (!eapol->secure()) {
+        if (!eapol->secure() && eapol->wpa_length() > 0) {
+            cout << "Second packet." << endl;
             do_insert(addresses, eapol, 1);
         }
         // Otherwise, this should be the 4th and last packet
         else if (do_insert(addresses, eapol, 3)) {
+            cout << "Fourth and last packet." << endl;
             completed_handshakes_.push_back(
                 handshake_type(
                     addresses.first,
@@ -77,6 +97,7 @@ bool RSNHandshakeCapturer::process_packet(const PDU& pdu) {
     }
     // 3nd packet
     else if (eapol->key_t() && eapol->key_ack() && eapol->key_mic() && eapol->install()) {
+        cout << "Third packet." << endl;
         do_insert(addresses, eapol, 2);
     }
     return false;
